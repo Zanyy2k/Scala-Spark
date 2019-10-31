@@ -1,0 +1,34 @@
+import org.apache.spark.rdd.RDD
+import org.apache.spark.{SparkConf, SparkContext}
+
+object TestScala {
+  def main(args: Array[String]): Unit = {
+    val conf = new SparkConf()
+    conf.set("spark.testing.memory", "2147480000")
+    conf.setAppName("simple test")
+    conf.setMaster("local[1]")
+    val sc = new SparkContext(conf)
+    println(sc)
+
+// Store the file path
+    val filePath ="/Users/zongdongyu/Downloads/Taxi_Trips.csv"
+// Create a RDD to read text file
+    val input = sc.textFile(filePath)
+
+    // Print the RDD
+//    val countRdd = input.map(line => line.split(",")).filter(line => line.length>1).map(line => line.length)
+
+    // Transform the RDD into countRDD
+    val countRdd = input.flatMap(line => line.split(" ")).map(word =>(word,1)).reduceByKey(_ + _)
+//    val L1 = List("1", "2", "3")
+//    val L2 = List("a", "b", "c")
+//    val L1Rdd = sc.parallelize(L1)
+//    val L2Rdd = sc.parallelize(L2)
+//    val L3Rdd = L1Rdd.zip(L2Rdd)
+
+//    collect() fetches the entire RDD to a single machine
+      countRdd.collect().foreach(println)
+
+    println("ok")
+  }
+}
