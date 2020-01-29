@@ -1,0 +1,40 @@
+from pyspark import SparkConf, SparkContext
+import re
+
+sc = SparkContext(conf=SparkConf())
+
+# Data file input (transformation to RDD)
+music_review = sc.textFile("C:/Users/YZD/Downloads/Musical_Instruments_5.json")
+
+# music_review.foreach(print)
+print(music_review.count())
+print(type(music_review))
+print(music_review.take(5))
+
+# Step 1 From the review file, get the number of unique reviewer IDs for each product
+music_review_line = music_review.map(lambda r: eval(r))
+print(music_review_line.take(5))
+music_review_id_product = music_review_line.map(lambda l: (l['reviewerID'], l['asin']))
+print(music_review_id_product.take(5))
+
+y = music_review_id_product.groupBy(lambda word: word[1])
+
+for t in y.collect():
+    print((t[0],[i for i in t[1]]))
+
+#
+# meta = sc.textFile("meta_Musical_Instruments.json")
+# line_meta = meta.map(lambda m:eval(m))
+# line_meta.collect()
+#
+# have_price = line_meta.filter(lambda x:'price' in list(x.keys()))
+# have_price.collect()
+#
+# pair_meta = have_price.map(lambda ml:(ml['asin'],ml['price']))
+# pair_meta.collect()
+#
+# pair_meta['price']
+#
+# # words = lines.flatMap(lambda l: re.split(r'[^\w]+',l))
+# # pairs = words.map(lambda w: (w, 1))
+# # counts = pairs.reduceByKey(lambda n1, n2: n1 + n2)
