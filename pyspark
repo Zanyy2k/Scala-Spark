@@ -1,40 +1,51 @@
 from pyspark import SparkConf, SparkContext
-import re
 
+SparkContext.setSystemProperty('spark.executor.memory', '10g')
 sc = SparkContext(conf=SparkConf())
 
 # Data file input (transformation to RDD)
-music_review = sc.textFile("C:/Users/YZD/Downloads/Musical_Instruments_5.json")
+music_review = sc.textFile("/Users/zongdongyu/Downloads/Musical_Instruments_5.json")
+meta_data = sc.textFile("/Users/zongdongyu/Downloads/metadata.json")
 
-# music_review.foreach(print)
 print(music_review.count())
 print(type(music_review))
 print(music_review.take(5))
 
-# Step 1 From the review file, get the number of unique reviewer IDs for each product
+# # # Step 1. From the review file, get the number of unique reviewer IDs for each product
 music_review_line = music_review.map(lambda r: eval(r))
 print(music_review_line.take(5))
-music_review_id_product = music_review_line.map(lambda l: (l['reviewerID'], l['asin']))
-print(music_review_id_product.take(5))
+# # # pair rdd
+music_review_pair= music_review_line.map(lambda mrl: (mrl['reviewerID'], mrl['asin']))
+print(music_review_pair.take(5))
 
-y = music_review_id_product.groupBy(lambda word: word[1])
+# review_Id = music_review_pair.map(lambda x: x[0])
+# print('Reviewer Id : ', review_Id.take(5),'\n')
+# as_in = music_review_pair.map(lambda x: x[1])
+# print('AsIn : ', as_in.take(100),'\n')
 
-for t in y.collect():
-    print((t[0],[i for i in t[1]]))
+# # # Find the number of unique reviewer IDs for each product from the review file
+music_review_counts = sc.parallelize(sorted(music_review_pair.map(lambda mrc: mrc[1]).countByValue().items()))
+# counts = sc.parallelize(music_review_pair.map(lambda x: (x[1], 1)).reduceByKey(lambda x,y: x+y).collect())
+print(type(music_review_counts))
+print(music_review_counts.take(100), '\n')
 
-#
-# meta = sc.textFile("meta_Musical_Instruments.json")
-# line_meta = meta.map(lambda m:eval(m))
-# line_meta.collect()
-#
-# have_price = line_meta.filter(lambda x:'price' in list(x.keys()))
-# have_price.collect()
-#
-# pair_meta = have_price.map(lambda ml:(ml['asin'],ml['price']))
-# pair_meta.collect()
-#
-# pair_meta['price']
-#
-# # words = lines.flatMap(lambda l: re.split(r'[^\w]+',l))
-# # pairs = words.map(lambda w: (w, 1))
-# # counts = pairs.reduceByKey(lambda n1, n2: n1 + n2)
+# # # Step 2. Create an RDD, based on the metadata, consisting of key/value-array pairs,
+# # # key is the product ID/asin and value should contain the price of the product.
+meta_data_line = meta_data.map(lambda m: eval(m))
+print(meta_data_line.take(5))
+meta_data_filter = meta_data_line.filter(lambda mdf: 'price' in mdf)
+print(meta_data_filter.take(5))
+meta_data_pair= meta_data_filter.map(lambda mdl: (mdl['asin'], mdl['price']))
+print(meta_data_pair.take(5))
+
+# # # Step 3. Join the pair RDD in Step 2 with the set of product-ID and
+# # # unique reviewer ID count pairs calculated in Step 1.
+
+music_meta_join = music_review_counts.join(meta_data_pair)
+print(type(music_meta_join))
+print(music_meta_join.take(5))
+
+# # # Step 4. Display the product ID, unique reviewer ID count,
+# # # and the product price for the top 10 products based on the unique reviewer ID count.
+music_meta_join_sort = music_meta_join.sortBy(lambda mmj: mmj[1][0], ascending=False)
+print(music_meta_join_sort.take(10))
