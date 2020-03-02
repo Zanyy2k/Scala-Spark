@@ -1,0 +1,234 @@
+# version
+# python - 3.75 
+# pyspark - 2.4.4
+
+import os 
+import re 
+import math
+import string
+from pyspark.ml.linalg import Vectors
+from pyspark import SparkConf, SparkContext
+
+# Create a main entry point for spark functionality 
+sc = SparkContext(conf=SparkConf())
+
+# Replace the dir pith to your folder path
+dir_path = '/Users/zongdongyu/Desktop/Lab2/Lab2 files'
+stop_word_path = dir_path + '/stopwords.txt'
+query_path = dir_path + '/query.txt'
+input_path = dir_path + '/lab2 input'
+
+# Read Stop Words
+stop_word_file = sc.textFile(stop_word_path)
+stop_words = stop_word_file.flatMap(lambda x : x.split(",")).collect()
+
+
+term_freq = sc.emptyRDD()
+
+# Read input file 
+for filename in os.listdir(input_path): 
+    file = input_path + '/' + filename
+    fn = filename.replace('.txt','')
+    file_text = sc.textFile(file)
+    # print(file_text.collect())
+
+    # Preprocessing 
+    # Convert to smaller case 
+    lines_lower = file_text.map(lambda x : x.lower())
+    # print(lines_lower.collect(), '\n')
+
+    # Remove punctuation & whitespaces
+    lines_no_punctuation = lines_lower.map(lambda x : x.translate(str.maketrans("","",string.punctuation)).strip())
+    # print(lines_no_punctuation.collect(), '\n')
+
+    # Tokenize 
+    words = lines_no_punctuation.flatMap(lambda w: re.split(r'[^\w]+',w))
+    # print(words.collect(), '\n')
+
+    # Remove Stop words
+    filteredWords = words.filter(lambda x : x not in stop_words)
+    # print(filteredWords.collect(), '\n')
+
+    # Step 1. 
+    # Get word count 
+    pairs = filteredWords.map(lambda fw: (fw, 1))
+    counts = pairs.reduceByKey(lambda n1, n2 : n1 + n2)
+    # print(sorted(counts.collect(), '\n'))
+
+    # Term Frequency pair (word, count, filename)
+    plusfile = counts.map(lambda c : (c[0], c[1], fn))
+    # print(plusfile.collect(), '\n')
+
+    # Combine Term Frequency 
+    term_freq = sc.union([term_freq,plusfile])
+
+term_freq = term_freq.map(lambda tf : (tf[0], (tf[1], tf[2])))
+# print(term_freq.take(10), '\n')
+
+
+# Step 2 : Compute TF-IDF
+# TF-IDF = (1 + log(TF)) * log(N/DF)
+# N : Total number of documents
+# TF : Count of the word in a document
+# DF : Count of documents having the word
+
+# Define N 
+N = len(os.listdir(input_path))
+
+# Calculate DF 
+DF_pairs = term_freq.map(lambda tf: (tf[0], 1))
+DF_counts = DF_pairs.reduceByKey(lambda n1, n2: n1 + n2)
+# print(sorted(DF_counts.take(5)), '\n')
+
+# Calculate IDF
+IDF = DF_counts.map(lambda df:(df[0],math.log(N/df[1],10)))
+# print(IDF.take(5), '\n')
+
+# Join the TF & IDF (word, (tf, filename), idf)  
+join_tf_idf = term_freq.leftOuterJoin(IDF)
+# print(join_tf_idf.take(5), '\n')
+
+# Calculate TF-IDF (word, filename,TF-IDF)
+tf_idf = join_tf_idf.map(lambda jti:(jti[0], jti[1][0][1], (1 + math.log(jti[1][0][0], 10)) * jti[1][1]))
+# print(tf_idf.take(10), '\n')
+
+# Retrive the word list and give index to each word
+word_list = term_freq.map(lambda tf:tf[0]).distinct().zipWithIndex().collectAsMap()
+# print(word_list, '\n')
+word_count = len(word_list)
+
+# Replace the word as the index in word_list
+transform = tf_idf.map(lambda t:(t[1],(word_list[t[0]],t[2])))
+# print(transform.take(5), '\n')
+
+# Transform to [filename,[(word_index, TF-IDF),(...)]]
+transform1 = transform.map(lambda t: (t[0], [t[1]])).reduceByKey(lambda n1, n2 : n1 + n2)
+# print(transform1.take(2), '\n')
+
+# Create vector table
+result_step2 = transform1.map(lambda t:(t[0], Vectors.sparse(word_count, t[1])))
+print('Step 2 result : ', '\n', result_step2.take(1), '\n')
+
+
+# Step3 : Compute normalized TF-IDF
+
+# Calculate sum of squre of TF-IDE per file
+ss_tf_idf = transform.map(lambda t:(t[0], t[1][1]*t[1][1])).reduceByKey(lambda n1, n2 : n1 + n2)
+# print(ss_tf_ide.take(5))
+s = ss_tf_idf.collectAsMap()
+# print(s)
+
+# Normalize tf-idf (tf-idf / sqrt(s))
+norm_tf_idf = transform.map(lambda t:(t[0],(t[1][0], t[1][1]/math.sqrt(s[t[0]]))))
+# print(norm_tf_idf.take(5))
+
+# Transform to [filename,[(word_index, TF-IDF),(...)]]
+transform_norm = norm_tf_idf.map(lambda nti: (nti[0], [nti[1]])).reduceByKey(lambda n1, n2 : n1 + n2)
+# print(transform_norm.take(2), '\n')
+
+# Create vector table
+result_step3 = transform_norm.map(lambda t:(t[0], Vectors.sparse(word_count, t[1])))
+print('Step 3 result : ', '\n', result_step3.take(1), '\n')
+
+result_step3_array = result_step3.map(lambda x:(x[0],x[1].toArray()))
+print(result_step3_array.take(1), '\n')
+
+# Step 4 : Compute relevance of each document to query 
+
+# Read query 
+query = sc.textFile(query_path)
+# print(query.collect(), '\n')
+
+#preprocessing
+query_cleaned = query.flatMap(lambda q: q.lower().split(' '))
+# print(query_cleaned.collect(), '\n')
+
+# Convert to word index 
+query_index = query_cleaned.map(lambda qc: (word_list[qc],1))
+# print(query_index.collect(), '\n')
+
+# Vectorize query 
+query_vec = Vectors.sparse(word_count,query_index.collect())
+# print(query_vec, '\n')
+
+query_vec_array = query_vec.toArray()
+# print(query_vec_array, '\n')
+
+#compute the cos distance
+result_step4 = result_step3_array.map(lambda x:(x[0],sum(x[1]*query_vec_array)/(math.sqrt(sum(query_vec_array*query_vec_array))*math.sqrt(sum(x[1]*x[1])))))
+print('Step 4 result : ','\n',result_step4.collect(), '\n')
+
+
+# Step 5 : Sort and get top 10 documents
+result_step5 = sc.parallelize(result_step4.sortBy(lambda x:x[1],ascending = False).take(10))
+print('Step 5 result : ', '\n', result_step5.collect(), '\n')
+
+
+### Task B ###
+# import the packages needed
+from pyspark.sql.session import SparkSession
+spark = SparkSession(sc)
+from pyspark.ml.clustering import KMeans
+from pyspark.ml.evaluation import ClusteringEvaluator
+
+# Use norm TF-IDF from step 3 above
+result_step3 = result_step3_array.map(lambda x:(x[0],Vectors.dense(x[1])))
+data = spark.createDataFrame(result_step3,['id','features'])
+
+print('Task B : Data', '\n')
+data.show()
+
+# Compare clusters between Cosine similarity & Euclidean distance
+silh_score_list_cos = []
+ss_list_cos = []
+result_cos = {}
+
+silh_score_list_euc = []
+ss_list_euc = []
+result_euc = {}
+
+for i in range(2,9):
+    ## Cosine Similarity
+    # Trains a k-means model 
+    kmeans = KMeans(k=i,seed= 1,distanceMeasure = 'cosine')
+    model = kmeans.fit(data)
+    # Make predictions
+    predictions = model.transform(data)
+    # Evaluate clustering by computing Silhouette score
+    evaluator = ClusteringEvaluator()
+    silh_score_list_cos.append(evaluator.evaluate(predictions))
+    # Evaluate clustering by computing Within Set Sum of Squared Errors
+    ss_list_cos.append(model.computeCost(data))
+    # The cluster result
+    pre = predictions.rdd.map(lambda x:(x[2],[x[0]])).reduceByKey(lambda p,q:p+q).collectAsMap()
+    result_cos[i] = list(pre.values())
+    
+    ## Euclidean Distance
+    # Trains a k-means model 
+    kmeans = KMeans(k=i, seed= 1)
+    model = kmeans.fit(data)
+    # Make predictions
+    predictions = model.transform(data)
+    # Evaluate clustering by computing Silhouette score
+    evaluator = ClusteringEvaluator()
+    silh_score_list_euc.append(evaluator.evaluate(predictions))
+    # Evaluate clustering by computing Within Set Sum of Squared Errors
+    ss_list_euc.append(model.computeCost(data))
+    # The cluster result
+    pre = predictions.rdd.map(lambda x:(x[2],[x[0]])).reduceByKey(lambda p,q:p+q).collectAsMap()
+    result_euc[i] = list(pre.values())
+
+    # # Shows the result.
+    # centers = model.clusterCenters()
+    # print("Cluster Centers: ")
+    # for center in centers:
+    #     print(center)
+
+print('silh_score_list_cos : ', '\n', silh_score_list_cos, '\n')
+print('silh_score_list_euc : ', '\n', silh_score_list_euc, '\n')
+
+print('ss_list_cos : ', '\n', ss_list_cos, '\n')
+print('ss_list_euc : ', '\n', ss_list_euc, '\n')
+
+print('result_cos : ', '\n', result_cos, '\n')
+print('result_euc : ', '\n', result_euc, '\n')
